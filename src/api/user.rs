@@ -1,15 +1,16 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, env};
 
-use actix_web::{get, HttpResponse, Responder, post, web::Data};
+use actix_web::{get, HttpResponse, Responder, post, web::{Data, ReqData}};
 use actix_web_jsonschema::Json;
-use chrono::Utc;
-use mysql::{prelude::Queryable, params};
+use chrono::{Utc, Local, Duration};
+use jsonwebtoken::{encode, EncodingKey, Header};
+use mysql::{prelude::Queryable, params, Value};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 use sha2::{Sha256, Digest};
 
-use crate::AppState;
+use crate::{AppState, auth::validate::Claims};
 
 /*
  * Api account register schema
@@ -28,13 +29,76 @@ struct RegisterSchema {
     address: String,
     #[validate(length(max = 255))]
     description: String,
-    #[validate(length(max = 255))]
-    ranks: String
+    #[validate(range(min = 0, max = 99))]
+    ranks: u32
+}
+
+/*
+ * Api account login schema
+ */
+#[derive(Deserialize, Serialize, Validate, JsonSchema)]
+struct LoginSchema {
+    #[validate(length(min = 3, max = 255))]
+    indicative: String,
+    #[validate(length(min = 3, max = 255))]
+    password: String
+}
+
+#[derive(Deserialize, Serialize)]
+struct User {
+    id: u32,
+    indicative: String,
+    create_time: String,
+    city: String,
+    postal_code: String,
+    address: String,
+    description: String,
+    ranks: u32
 }
 
 #[post("/")]
-async fn register(info: Json<RegisterSchema>, data: Data<AppState>) -> impl Responder {
+async fn create_user(info: Json<RegisterSchema>, req_user: Option<ReqData<Claims>>, data: Data<AppState>) -> impl Responder {
     let mut conn = data.db.get_conn().unwrap();
+
+    match req_user {
+        Some(user) => {
+            let stmt = conn.prep("SELECT * FROM user WHERE id = :id").unwrap();
+            let params = params! {
+                "id" => user.id
+            };
+
+            let result = conn.exec_first::<(u32, String, String, Value, String, String, String, String, u32), _, _>(stmt, params);
+
+            match result {
+                Ok(Some(res)) => {
+                    if res.8 != 99 {
+                        return HttpResponse::Unauthorized().body("You aren't admin");
+                    }
+                },
+                Ok(None) => {
+                    let mut res = HashMap::new();
+                    res.insert("error", "User not found");
+
+                    return HttpResponse::NotFound().json(res);
+                }
+                Err(err) => {
+                    // DEBUG
+                    eprintln!("Error executing query: {}", err);
+
+                    let mut res = HashMap::new();
+                    res.insert("error", "Please contact the administrator");
+
+                    return HttpResponse::InternalServerError().json(res);
+                }
+            }
+        },
+        _ => {
+            let mut res = HashMap::new();
+            res.insert("error", "Unable to verify identity");
+
+            return HttpResponse::Unauthorized().json(res);
+        }
+    }
 
     let stmt = conn.prep("INSERT INTO user (indicative, password, create_time, city, postal_code, address, description, ranks) VALUES (:indicative, :password, :create_time, :city, :postal_code, :address, :description, :ranks)").unwrap();
     let params = params! {
@@ -50,6 +114,96 @@ async fn register(info: Json<RegisterSchema>, data: Data<AppState>) -> impl Resp
 
     match conn.exec_drop(stmt, params) {
         Ok(_) => HttpResponse::Ok().json(&info.0),
+        Err(err) => {
+            // DEBUG
+            eprintln!("Error executing query: {}", err);
+
+            let mut res = HashMap::new();
+            res.insert("error", "Please contact the administrator");
+
+            HttpResponse::InternalServerError().json(res)
+        }
+    }
+}
+
+#[get("/")]
+async fn get_users(data: Data<AppState>) -> impl Responder {
+    let mut conn = data.db.get_conn().unwrap();
+
+    let result = conn.query_map("SELECT id, indicative, create_time, city, postal_code, address, description, ranks FROM user", |(id, indicative, create_time, city, postal_code, address, description, ranks)| {
+        User {
+            id,
+            indicative,
+            create_time,
+            city,
+            postal_code,
+            address,
+            description,
+            ranks
+        }
+    });
+
+    match result {
+        Ok(users) => {
+            if users.is_empty() {
+                let mut res = HashMap::new();
+                res.insert("error", "User not found");
+
+                HttpResponse::NotFound().json(res)
+            } else {
+                HttpResponse::Ok().json(users)
+            }
+        }
+        Err(err) => {
+            // DEBUG
+            eprintln!("Error executing query: {}", err);
+
+            let mut res = HashMap::new();
+            res.insert("error", "Please contact the administrator");
+
+            HttpResponse::InternalServerError().json(res)
+        }
+    }
+}
+
+#[post("/login")]
+async fn login(info: Json<LoginSchema>, data: Data<AppState>) -> impl Responder {
+    let mut conn = data.db.get_conn().unwrap();
+
+    let stmt = conn.prep("SELECT * FROM user WHERE indicative = :indicative").unwrap();
+    let params = params! {
+        "indicative" => &info.indicative
+    };
+
+    let result = conn.exec_first::<(u32, String, String, Value, String, String, String, String, u32), _, _>(stmt, params);
+
+    match result {
+        Ok(Some(row)) => {
+            if row.2 == hex::encode(Sha256::digest(&info.password)) {
+                let claims = Claims {
+                    exp: (Local::now() + Duration::days(1)).timestamp() as usize,
+                    id: row.0
+                };
+
+                let token = encode(&Header::default(), &claims, &EncodingKey::from_secret(env::var("JWT_SECRET").unwrap().as_str().as_ref()));
+
+                let mut res = HashMap::new();
+                res.insert("token", token.unwrap());
+                
+                HttpResponse::Ok().json(res)
+            } else {
+                let mut res = HashMap::new();
+                res.insert("error", "Password is wrong");
+
+                HttpResponse::BadRequest().json(res)
+            }
+        }
+        Ok(None) => {
+            let mut res = HashMap::new();
+            res.insert("error", "User not found");
+
+            HttpResponse::NotFound().json(res)
+        }
         Err(err) => {
             eprintln!("Error executing query: {}", err);
 

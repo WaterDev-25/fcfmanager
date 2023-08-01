@@ -1,12 +1,15 @@
 mod api;
+mod auth;
 
 use actix_web::{App, HttpServer, web};
 use actix_files::Files;
+use actix_web_httpauth::middleware::HttpAuthentication;
 use mysql::Pool;
 use dotenv::dotenv;
 use std::env;
 
-use api::user::register;
+use api::user::{create_user, get_users, login};
+use auth::validate::validator;
 
 pub struct AppState {
     db: Pool
@@ -31,8 +34,11 @@ async fn main() -> std::io::Result<()> {
                 web::scope("/api")
                 .service(
                     web::scope("/user")
-                        .service(register)
+                        .wrap(HttpAuthentication::bearer(validator.clone()))
+                        .service(create_user)
+                        .service(get_users)
                 )
+                .service(login)
             )
             .service(Files::new("/", "./static").index_file("index.html"))
     })
