@@ -1,6 +1,6 @@
 use std::{collections::HashMap, env};
 
-use actix_web::{get, HttpResponse, Responder, post, web::{Data, ReqData}};
+use actix_web::{get, HttpResponse, Responder, post, web::{Data, ReqData, self}};
 use actix_web_jsonschema::Json;
 use chrono::{Utc, Local, Duration};
 use jsonwebtoken::{encode, EncodingKey, Header};
@@ -56,6 +56,11 @@ struct User {
     ranks: u32
 }
 
+enum Ranks {
+    ADMIN = 99,
+    SUSPENDED = 0
+}
+
 #[post("/")]
 async fn create_user(info: Json<RegisterSchema>, req_user: Option<ReqData<Claims>>, data: Data<AppState>) -> impl Responder {
     let mut conn = data.db.get_conn().unwrap();
@@ -71,7 +76,7 @@ async fn create_user(info: Json<RegisterSchema>, req_user: Option<ReqData<Claims
 
             match result {
                 Ok(Some(res)) => {
-                    if res.8 != 99 {
+                    if res.8 != Ranks::ADMIN as u32 {
                         return HttpResponse::Unauthorized().body("You aren't admin");
                     }
                 },
@@ -82,7 +87,6 @@ async fn create_user(info: Json<RegisterSchema>, req_user: Option<ReqData<Claims
                     return HttpResponse::NotFound().json(res);
                 }
                 Err(err) => {
-                    // DEBUG
                     eprintln!("Error executing query: {}", err);
 
                     let mut res = HashMap::new();
@@ -127,8 +131,47 @@ async fn create_user(info: Json<RegisterSchema>, req_user: Option<ReqData<Claims
 }
 
 #[get("/")]
-async fn get_users(data: Data<AppState>) -> impl Responder {
+async fn get_users(req_user: Option<ReqData<Claims>>, data: Data<AppState>) -> impl Responder {
     let mut conn = data.db.get_conn().unwrap();
+
+    match req_user {
+        Some(user) => {
+            let stmt = conn.prep("SELECT * FROM user WHERE id = :id").unwrap();
+            let params = params! {
+                "id" => user.id
+            };
+
+            let result = conn.exec_first::<(u32, String, String, Value, String, String, String, String, u32), _, _>(stmt, params);
+
+            match result {
+                Ok(Some(res)) => {
+                    if res.8 == Ranks::SUSPENDED as u32 {
+                        return HttpResponse::Unauthorized().body("Your account is suspended");
+                    }
+                },
+                Ok(None) => {
+                    let mut res = HashMap::new();
+                    res.insert("error", "User not found");
+
+                    return HttpResponse::NotFound().json(res);
+                }
+                Err(err) => {
+                    eprintln!("Error executing query: {}", err);
+
+                    let mut res = HashMap::new();
+                    res.insert("error", "Please contact the administrator");
+
+                    return HttpResponse::InternalServerError().json(res);
+                }
+            }
+        },
+        _ => {
+            let mut res = HashMap::new();
+            res.insert("error", "Unable to verify identity");
+
+            return HttpResponse::Unauthorized().json(res);
+        }
+    }
 
     let result = conn.query_map("SELECT id, indicative, create_time, city, postal_code, address, description, ranks FROM user", |(id, indicative, create_time, city, postal_code, address, description, ranks)| {
         User {
@@ -155,7 +198,92 @@ async fn get_users(data: Data<AppState>) -> impl Responder {
             }
         }
         Err(err) => {
-            // DEBUG
+            eprintln!("Error executing query: {}", err);
+
+            let mut res = HashMap::new();
+            res.insert("error", "Please contact the administrator");
+
+            HttpResponse::InternalServerError().json(res)
+        }
+    }
+}
+
+#[get("/{id}")]
+async fn get_user(path: web::Path<String>, req_user: Option<ReqData<Claims>>, data: Data<AppState>) -> impl Responder {
+    let mut conn = data.db.get_conn().unwrap();
+
+    let mut id = path.into_inner();
+
+    match req_user {
+        Some(user) => {
+            let stmt = conn.prep("SELECT * FROM user WHERE id = :id").unwrap();
+            let params = params! {
+                "id" => user.id
+            };
+
+            let result = conn.exec_first::<(u32, String, String, Value, String, String, String, String, u32), _, _>(stmt, params);
+
+            match result {
+                Ok(Some(res)) => {
+                    if res.8 == Ranks::SUSPENDED as u32 {
+                        return HttpResponse::Unauthorized().body("Your account is suspended");
+                    }
+
+                    if id == "@me" {
+                        id = user.id.to_string();
+                    }
+                },
+                Ok(None) => {
+                    let mut res = HashMap::new();
+                    res.insert("error", "User not found");
+
+                    return HttpResponse::NotFound().json(res);
+                }
+                Err(err) => {
+                    eprintln!("Error executing query: {}", err);
+
+                    let mut res = HashMap::new();
+                    res.insert("error", "Please contact the administrator");
+
+                    return HttpResponse::InternalServerError().json(res);
+                }
+            }
+        },
+        _ => {
+            let mut res = HashMap::new();
+            res.insert("error", "Unable to verify identity");
+
+            return HttpResponse::Unauthorized().json(res);
+        }
+    }
+
+    let stmt = conn.prep("SELECT * FROM user WHERE id = :id").unwrap();
+    let params = params! {
+        "id" => id
+    };
+
+    let result = conn.exec_first::<(u32, String, String, Value, String, String, String, String, u32), _, _>(stmt, params);
+
+    match result {
+        Ok(Some(row)) => {
+            HttpResponse::Ok().json(User {
+                id: row.0,
+                indicative: row.1,
+                create_time: row.3.as_sql(false),
+                city: row.4,
+                postal_code: row.5,
+                address: row.6,
+                description: row.7,
+                ranks: row.8
+            })
+        }
+        Ok(None) => {
+            let mut res = HashMap::new();
+            res.insert("error", "User not found");
+
+            HttpResponse::NotFound().json(res)
+        }
+        Err(err) => {
             eprintln!("Error executing query: {}", err);
 
             let mut res = HashMap::new();

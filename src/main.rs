@@ -8,7 +8,7 @@ use mysql::Pool;
 use dotenv::dotenv;
 use std::env;
 
-use api::user::{create_user, get_users, login};
+use api::user::{create_user, get_users, login, get_user};
 use auth::validate::validator;
 
 pub struct AppState {
@@ -37,6 +37,7 @@ async fn main() -> std::io::Result<()> {
                         .wrap(HttpAuthentication::bearer(validator.clone()))
                         .service(create_user)
                         .service(get_users)
+                        .service(get_user)
                 )
                 .service(login)
             )
