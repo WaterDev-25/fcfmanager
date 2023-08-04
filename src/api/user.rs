@@ -362,9 +362,7 @@ async fn delete_user(path: web::Path<String>, req_user: Option<ReqData<Claims>>,
         "id" => id
     };
 
-    let result = conn.exec_drop(stmt, params);
-
-    match result {
+    match conn.exec_drop(stmt, params) {
         Ok(_) => {
             let mut res = HashMap::new();
             res.insert("result", "Account has been successfully deleted");
