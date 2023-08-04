@@ -8,7 +8,7 @@ use mysql::Pool;
 use dotenv::dotenv;
 use std::env;
 
-use api::user::{create_user, get_users, login, get_user, delete_user};
+use api::user::{create_user, get_users, login, get_user, delete_user, update_user};
 use auth::validate::validator;
 
 pub struct AppState {
@@ -39,6 +39,7 @@ async fn main() -> std::io::Result<()> {
                         .service(get_users)
                         .service(get_user)
                         .service(delete_user)
+                        .service(update_user)
                 )
                 .service(login)
             )

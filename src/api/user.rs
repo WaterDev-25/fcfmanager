@@ -1,6 +1,6 @@
 use std::{collections::HashMap, env};
 
-use actix_web::{get, HttpResponse, Responder, post, web::{Data, ReqData, self}, delete};
+use actix_web::{get, HttpResponse, Responder, post, web::{Data, ReqData, self}, delete, put};
 use actix_web_jsonschema::Json;
 use chrono::{Utc, Local, Duration};
 use jsonwebtoken::{encode, EncodingKey, Header};
@@ -12,9 +12,6 @@ use sha2::{Sha256, Digest};
 
 use crate::{AppState, auth::validate::Claims};
 
-/*
- * Api account register schema
- */
 #[derive(Deserialize, Serialize, Validate, JsonSchema)]
 struct RegisterSchema {
     #[validate(length(min = 3, max = 255))]
@@ -33,15 +30,30 @@ struct RegisterSchema {
     ranks: u32
 }
 
-/*
- * Api account login schema
- */
 #[derive(Deserialize, Serialize, Validate, JsonSchema)]
 struct LoginSchema {
     #[validate(length(min = 3, max = 255))]
     indicative: String,
     #[validate(length(min = 3, max = 255))]
     password: String
+}
+
+#[derive(Deserialize, Serialize, Validate, JsonSchema)]
+struct UpdateSchema {
+    #[validate(length(min = 3, max = 255))]
+    indicative: Option<String>,
+    #[validate(length(min = 3, max = 255))]
+    password: String,
+    #[validate(length(max = 255))]
+    city: String,
+    #[validate(length(max = 255))]
+    postal_code: String,
+    #[validate(length(max = 255))]
+    address: String,
+    #[validate(length(max = 255))]
+    description: String,
+    #[validate(range(min = 0, max = 99))]
+    ranks: Option<u32>
 }
 
 #[derive(Deserialize, Serialize)]
@@ -76,6 +88,13 @@ async fn create_user(info: Json<RegisterSchema>, req_user: Option<ReqData<Claims
 
             match result {
                 Ok(Some(res)) => {
+                    if res.8 == Ranks::SUSPENDED as u32 {
+                        let mut res = HashMap::new();
+                        res.insert("result", "Your account is suspended");
+
+                        return HttpResponse::Unauthorized().json(res);
+                    }
+
                     if res.8 != Ranks::ADMIN as u32 {
                         let mut res = HashMap::new();
                         res.insert("result", "You aren't admin");
@@ -376,6 +395,139 @@ async fn delete_user(path: web::Path<String>, req_user: Option<ReqData<Claims>>,
             res.insert("error", "Please contact the administrator");
 
             HttpResponse::InternalServerError().json(res)
+        }
+    }
+}
+
+#[put("/{id}")]
+async fn update_user(path: web::Path<String>, info: Json<UpdateSchema>, req_user: Option<ReqData<Claims>>, data: Data<AppState>) -> impl Responder {
+    let mut conn = data.db.get_conn().unwrap();
+
+    let mut id = path.into_inner();
+
+    let mut is_admin = false;
+
+    match req_user {
+        Some(user) => {
+            let stmt = conn.prep("SELECT * FROM user WHERE id = :id").unwrap();
+            let params = params! {
+                "id" => user.id
+            };
+
+            let result = conn.exec_first::<(u32, String, String, Value, String, String, String, String, u32), _, _>(stmt, params);
+
+            match result {
+                Ok(Some(res)) => {
+                    if res.8 == Ranks::SUSPENDED as u32 {
+                        let mut res = HashMap::new();
+                        res.insert("result", "Your account is suspended");
+
+                        return HttpResponse::Unauthorized().json(res);
+                    }
+
+                    if res.8 == Ranks::ADMIN as u32 {
+                        is_admin = true;
+                    } else {
+                        is_admin = false;
+                    }
+
+                    if !is_admin && id != "@me" {
+                        let mut res = HashMap::new();
+                        res.insert("result", "You aren't admin");
+
+                        return HttpResponse::Unauthorized().json(res);
+                    }
+
+                    if !is_admin {
+                        if info.indicative != None || info.ranks != None {
+                            let mut res = HashMap::new();
+                            res.insert("result", "You can't update indicative or ranks if you're not admin");
+
+                            return HttpResponse::Unauthorized().json(res);
+                        }
+                        
+                    } else {
+                        if info.indicative == None || info.ranks == None {
+                            let mut res = HashMap::new();
+                            res.insert("result", "You can't update without specify indicative and ranks");
+    
+                            return HttpResponse::Unauthorized().json(res);
+                        }
+                    }
+
+                    if id == "@me" {
+                        id = user.id.to_string();
+                    }
+                },
+                Ok(None) => {
+                    let mut res = HashMap::new();
+                    res.insert("error", "User not found");
+
+                    return HttpResponse::NotFound().json(res);
+                }
+                Err(err) => {
+                    eprintln!("Error executing query: {}", err);
+
+                    let mut res = HashMap::new();
+                    res.insert("error", "Please contact the administrator");
+
+                    return HttpResponse::InternalServerError().json(res);
+                }
+            }
+        },
+        _ => {
+            let mut res = HashMap::new();
+            res.insert("error", "Unable to verify identity");
+
+            return HttpResponse::Unauthorized().json(res);
+        }
+    }
+
+    if is_admin {
+        let stmt = conn.prep("UPDATE user SET indicative = :indicative, password = :password, city = :city, postal_code = :postal_code, address = :address, description = :description, ranks = :ranks WHERE id = :id").unwrap();
+        let params = params! {
+            "id" => id,
+            "indicative" => &info.indicative,
+            "password" => hex::encode(Sha256::digest(&info.password)),
+            "city" => &info.city,
+            "postal_code" => &info.postal_code,
+            "address" => &info.address,
+            "description" => &info.description,
+            "ranks" => &info.ranks
+        };
+
+        match conn.exec_drop(stmt, params) {
+            Ok(_) => HttpResponse::Ok().json(&info.0),
+            Err(err) => {
+                eprintln!("Error executing query: {}", err);
+
+                let mut res = HashMap::new();
+                res.insert("error", "Please contact the administrator");
+
+                HttpResponse::InternalServerError().json(res)
+            }
+        }
+    } else {
+        let stmt = conn.prep("UPDATE user SET password = :password, city = :city, postal_code = :postal_code, address = :address, description = :description WHERE id = :id").unwrap();
+        let params = params! {
+            "id" => id,
+            "password" => hex::encode(Sha256::digest(&info.password)),
+            "city" => &info.city,
+            "postal_code" => &info.postal_code,
+            "address" => &info.address,
+            "description" => &info.description
+        };
+
+        match conn.exec_drop(stmt, params) {
+            Ok(_) => HttpResponse::Ok().json(&info.0),
+            Err(err) => {
+                eprintln!("Error executing query: {}", err);
+
+                let mut res = HashMap::new();
+                res.insert("error", "Please contact the administrator");
+
+                HttpResponse::InternalServerError().json(res)
+            }
         }
     }
 }
