@@ -1,6 +1,6 @@
 use std::{collections::HashMap, env};
 
-use actix_web::{get, HttpResponse, Responder, post, web::{Data, ReqData, self}};
+use actix_web::{get, HttpResponse, Responder, post, web::{Data, ReqData, self}, delete};
 use actix_web_jsonschema::Json;
 use chrono::{Utc, Local, Duration};
 use jsonwebtoken::{encode, EncodingKey, Header};
@@ -77,7 +77,10 @@ async fn create_user(info: Json<RegisterSchema>, req_user: Option<ReqData<Claims
             match result {
                 Ok(Some(res)) => {
                     if res.8 != Ranks::ADMIN as u32 {
-                        return HttpResponse::Unauthorized().body("You aren't admin");
+                        let mut res = HashMap::new();
+                        res.insert("result", "You aren't admin");
+
+                        return HttpResponse::Unauthorized().json(res);
                     }
                 },
                 Ok(None) => {
@@ -119,7 +122,6 @@ async fn create_user(info: Json<RegisterSchema>, req_user: Option<ReqData<Claims
     match conn.exec_drop(stmt, params) {
         Ok(_) => HttpResponse::Ok().json(&info.0),
         Err(err) => {
-            // DEBUG
             eprintln!("Error executing query: {}", err);
 
             let mut res = HashMap::new();
@@ -146,7 +148,10 @@ async fn get_users(req_user: Option<ReqData<Claims>>, data: Data<AppState>) -> i
             match result {
                 Ok(Some(res)) => {
                     if res.8 == Ranks::SUSPENDED as u32 {
-                        return HttpResponse::Unauthorized().body("Your account is suspended");
+                        let mut res = HashMap::new();
+                        res.insert("result", "Your account is suspended");
+
+                        return HttpResponse::Unauthorized().json(res);
                     }
                 },
                 Ok(None) => {
@@ -226,7 +231,10 @@ async fn get_user(path: web::Path<String>, req_user: Option<ReqData<Claims>>, da
             match result {
                 Ok(Some(res)) => {
                     if res.8 == Ranks::SUSPENDED as u32 {
-                        return HttpResponse::Unauthorized().body("Your account is suspended");
+                        let mut res = HashMap::new();
+                        res.insert("result", "Your account is suspended");
+
+                        return HttpResponse::Unauthorized().json(res);
                     }
 
                     if id == "@me" {
@@ -283,6 +291,86 @@ async fn get_user(path: web::Path<String>, req_user: Option<ReqData<Claims>>, da
 
             HttpResponse::NotFound().json(res)
         }
+        Err(err) => {
+            eprintln!("Error executing query: {}", err);
+
+            let mut res = HashMap::new();
+            res.insert("error", "Please contact the administrator");
+
+            HttpResponse::InternalServerError().json(res)
+        }
+    }
+}
+
+#[delete("/{id}")]
+async fn delete_user(path: web::Path<String>, req_user: Option<ReqData<Claims>>, data: Data<AppState>) -> impl Responder {
+    let mut conn = data.db.get_conn().unwrap();
+
+    let id = path.into_inner();
+
+    match req_user {
+        Some(user) => {
+            let stmt = conn.prep("SELECT * FROM user WHERE id = :id").unwrap();
+            let params = params! {
+                "id" => user.id
+            };
+
+            let result = conn.exec_first::<(u32, String, String, Value, String, String, String, String, u32), _, _>(stmt, params);
+
+            match result {
+                Ok(Some(res)) => {
+                    if res.8 == Ranks::SUSPENDED as u32 {
+                        let mut res = HashMap::new();
+                        res.insert("result", "Your account is suspended");
+
+                        return HttpResponse::Unauthorized().json(res);
+                    }
+
+                    if res.8 != Ranks::ADMIN as u32 {
+                        let mut res = HashMap::new();
+                        res.insert("result", "You aren't admin");
+
+                        return HttpResponse::Unauthorized().json(res);
+                    }
+                },
+                Ok(None) => {
+                    let mut res = HashMap::new();
+                    res.insert("error", "User not found");
+
+                    return HttpResponse::NotFound().json(res);
+                }
+                Err(err) => {
+                    eprintln!("Error executing query: {}", err);
+
+                    let mut res = HashMap::new();
+                    res.insert("error", "Please contact the administrator");
+
+                    return HttpResponse::InternalServerError().json(res);
+                }
+            }
+        },
+        _ => {
+            let mut res = HashMap::new();
+            res.insert("error", "Unable to verify identity");
+
+            return HttpResponse::Unauthorized().json(res);
+        }
+    }
+
+    let stmt = conn.prep("DELETE FROM user WHERE id = :id").unwrap();
+    let params = params! {
+        "id" => id
+    };
+
+    let result = conn.exec_drop(stmt, params);
+
+    match result {
+        Ok(_) => {
+            let mut res = HashMap::new();
+            res.insert("result", "Account has been successfully deleted");
+
+            return HttpResponse::Ok().json(res);
+        },
         Err(err) => {
             eprintln!("Error executing query: {}", err);
 
