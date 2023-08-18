@@ -4,11 +4,13 @@ import Navigation from '../components/Navigation'
 import { useEffect, useState } from 'react'
 import Router from "next/router"
 import { Cookies } from "react-cookie"
+import axios from "axios"
 
 let cookies = new Cookies();
 
 export default function Home() {
   const [token, setToken] = useState("");
+  const [users, setUsers] = useState([]);
 
   useEffect(() => {
     const tokenFromCookies = cookies.get("token");
@@ -17,10 +19,17 @@ export default function Home() {
 
     if(!tokenFromCookies)
       Router.push("/");
+
+    axios.defaults.headers.common["Authorization"] = `Bearer ${tokenFromCookies}`;
+    axios.get("/api/user/")
+    .then((res) => {
+      setUsers(res.data);
+      console.log(res.data);
+    });
   }, []);
 
   return (
-    <div className={styles.container}>
+    <>
       <Head>
         <title>FCFM</title>
         <meta name="description" content="Indicative manager" />
@@ -28,7 +37,19 @@ export default function Home() {
       </Head>
       <main className={styles.main}>
           <Navigation />
+          <h1 className={styles.title}>List of users</h1>
+          {users.length !== 0 && <table className={styles.users}>
+            {users.map((e, index) => (
+              <tr key={index} className={e.ranks == 1 ? styles.user : styles.admin}>
+                <th>{e.id}</th>
+                <th>{e.indicative}</th>
+                <th>{e.city}</th>
+                <th>{e.address}</th>
+                <th>{e.description}</th>
+              </tr>
+            ))}
+          </table>}
       </main>
-    </div>
+    </>
   )
 }
