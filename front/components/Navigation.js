@@ -12,7 +12,7 @@ import {
 
 const cookies = new Cookies();
 
-export default function Navigation() {
+export default function Navigation({ user }) {
     const handleResponsive = () => {
         var x = document.getElementById(styles.nav);
 
@@ -31,9 +31,9 @@ export default function Navigation() {
     return (
         <>
             <div className={styles.nav} id={styles.nav}>
-                <Link href="#" className={styles.active}>Home</Link>
-                <Link href="#">Account</Link>
-                <Link href="#">Admin</Link>
+                <Link href="/" className={styles.active}>Home</Link>
+                <Link href="/account">Account</Link>
+                { user.ranks == 99 && <Link href="#">Admin</Link> }
                 <Link href="/" onClick={handleLogout}>Logout</Link>
                 <Link href="javascript:void(0);" className={styles.icon} onClick={handleResponsive}>
                     <FontAwesomeIcon

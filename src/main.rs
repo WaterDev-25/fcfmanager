@@ -44,6 +44,7 @@ async fn main() -> std::io::Result<()> {
                 .service(login)
             )
             .service(Files::new("/dashboard", "./static").index_file("dashboard.html"))
+            .service(Files::new("/account", "./static").index_file("account.html"))
             .service(Files::new("/", "./static").index_file("index.html"))
     })
     .bind(("127.0.0.1", 8080))?

@@ -11,6 +11,7 @@ let cookies = new Cookies();
 export default function Home() {
   const [token, setToken] = useState("");
   const [users, setUsers] = useState([]);
+  const [user, setUser] = useState({});
 
   useEffect(() => {
     const tokenFromCookies = cookies.get("token");
@@ -24,7 +25,11 @@ export default function Home() {
     axios.get("/api/user/")
     .then((res) => {
       setUsers(res.data);
-      console.log(res.data);
+    });
+
+    axios.get("/api/user/@me")
+    .then((res) => {
+      setUser(res.data);
     });
   }, []);
 
@@ -36,7 +41,7 @@ export default function Home() {
         <link rel="icon" href="/favicon.ico" />
       </Head>
       <main className={styles.main}>
-          <Navigation />
+          <Navigation user={user} />
           <h1 className={styles.title}>List of users</h1>
           {users.length !== 0 && <table className={styles.users}>
             {users.map((e, index) => (
